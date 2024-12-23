@@ -12,6 +12,36 @@ volatile unsigned long timerCounter = 0;
 volatile unsigned long motorTimer = 0; // Time in seconds to auto-off motor
 bool motorRunning = false;             // Flag to check motor state
 
+// Mode timing parameters
+enum WashMode { DELICATE, NORMAL, STRONG, HARD };
+WashMode currentMode = DELICATE;
+
+float onTime = 2.5;
+float offTime = 2.0;
+
+void updateMode(WashMode mode) 
+{
+  currentMode = mode;
+  switch (mode) {
+    case DELICATE:
+      onTime = 2.5;
+      offTime = 2.0;
+      break;
+    case NORMAL:
+      onTime = 3.5;
+      offTime = 2.0;
+      break;
+    case STRONG:
+      onTime = 4.0;
+      offTime = 2.0;
+      break;
+    case HARD:
+      onTime = 4.5;
+      offTime = 2.0;
+      break;
+  }
+}
+
 void timer_init() {
   cli();
 
@@ -60,43 +90,97 @@ void loop() {
   if (Serial.available() > 0) {
     int command = Serial.read();
 
-    if (command == 'A') {
-      digitalWrite(relayPin, HIGH);
-      motorRunning = true;
-      Serial.println("\nMOTOR ON");
-    } else if (command == 'B') {
-      digitalWrite(relayPin, LOW);
-      motorRunning = false;
-      motorTimer = 0;
-      Serial.println("\nMOTOR OFF");
-    } else if (command == 'C') {
-      digitalWrite(pumpPin, HIGH);
-      Serial.println("\nPUMP ON");
-    } else if (command == 'D') {
-      digitalWrite(pumpPin, LOW);
-      Serial.println("\nPUMP OFF");
-    } else {
-      motorTimer = command; // Interpret the received value as seconds
-      Serial.print("\nMotor Timer Set to: ");
-      Serial.print(motorTimer);
-      Serial.println(" seconds");
+    switch (command) {
+      case 'A':
+        digitalWrite(relayPin, HIGH);
+        motorRunning = true;
+        motorTimer = 0; // Infinite run
+        Serial.println("\nMOTOR ON (Infinite)");
+        break;
+      case 'B':
+        digitalWrite(relayPin, LOW);
+        motorRunning = false;
+        motorTimer = 0;
+        Serial.println("\nMOTOR OFF");
+        break;
+      case 'C':
+        digitalWrite(pumpPin, HIGH);
+        Serial.println("\nPUMP ON");
+        break;
+      case 'D':
+        digitalWrite(pumpPin, LOW);
+        Serial.println("\nPUMP OFF");
+        break;
+      case 'W':
+        updateMode(DELICATE);
+        Serial.println("\nMode: DELICATE");
+        break;
+      case 'X':
+        updateMode(NORMAL);
+        Serial.println("\nMode: NORMAL");
+        break;
+      case 'Y':
+        updateMode(STRONG);
+        Serial.println("\nMode: STRONG");
+        break;
+      case 'Z':
+        updateMode(HARD);
+        Serial.println("\nMode: HARD");
+        break;
+      default:
+          motorTimer = command; // Convert ASCII to integer
+          motorRunning = true;
+          Serial.print("\nMotor Timer Set to: ");
+          Serial.print(motorTimer);
+          Serial.println(" minutes");
+        break;
     }
   }
 }
 
-ISR(TIMER1_COMPA_vect) {
+ISR(TIMER1_COMPA_vect) 
+{
+  static int modeTimer = 0; // Timer in tenths of seconds (100ms intervals)
+  static bool motorState = true; // true for ON, false for OFF
   timerCounter++;
 
-  if (motorRunning && motorTimer > 0 && timerCounter % 10 == 0) { // Decrement every second
-    motorTimer--;
-    Serial.print("\nMotor Timer Remaining: ");
-    Serial.print(motorTimer);
-    Serial.println(" seconds");
+  if (motorRunning && motorTimer) 
+  {
+    modeTimer++; // Increment mode timer in 100ms intervals
 
-    if (motorTimer == 0) {
+    if (motorState && modeTimer >= onTime * 10) 
+    {
+      motorState = false; 
+      modeTimer = 0;
+    } 
+    else if (!motorState && modeTimer >= offTime * 10) 
+    {
+      motorState = true; // Turn motor on
+      modeTimer = 0;
+    }
+
+    if (motorState) 
+    {
+      digitalWrite(relayPin, HIGH);
+    } 
+    else 
+    {
       digitalWrite(relayPin, LOW);
-      motorRunning = false;
-      Serial.println("\nMOTOR AUTO-OFF");
+    }
+
+    if (timerCounter % 600 == 0) 
+    { 
+      motorTimer--;
+      Serial.print("\nMotor Timer Remaining: ");
+      Serial.print(motorTimer);
+      Serial.println(" minutes");
+
+      if (motorTimer == 0) {
+        motorRunning = false;
+        digitalWrite(relayPin, LOW);
+        Serial.println("\nMOTOR AUTO-OFF");
+        updateMode(currentMode); 
+      }
     }
   }
 }

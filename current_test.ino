@@ -1,5 +1,6 @@
 // Define sensor and calibration parameters
 #define SAMPLES (100)
+#define AVERAGE_SAMPLES (10)
 const int ACS712_PIN = A0;    // Analog pin connected to ACS712
 const float VREF = 5.0;       // Arduino Uno reference voltage (in volts)
 const int ADC_RES = 1024;     // ADC resolution
@@ -12,6 +13,8 @@ volatile unsigned long timerCounter = 0;
 volatile unsigned long motorTimer = 0; // Time in seconds to auto-off motor
 bool motorRunning = false;             // Flag to check motor state
 
+volatile unsigned long washcyclecount = 0;
+
 // Mode timing parameters
 enum WashMode { DELICATE, NORMAL, STRONG, HARD };
 WashMode currentMode = DELICATE;
@@ -19,6 +22,17 @@ WashMode currentMode = DELICATE;
 float onTime = 2.5;
 float offTime = 2.0;
 
+// Buffer to store the last 10 samples of current_rms
+float currentBuffer[AVERAGE_SAMPLES] = {0};
+int currentIndex = 0;
+
+// Variables for 30-second operation
+bool thirtySecondMode = false;
+bool watercycleMode =false;
+
+float thirtySecondSum = 0;
+int thirtySecondSamples = 0;
+float finalAverageCurrent =0;
 void updateMode(WashMode mode) 
 {
   currentMode = mode;
@@ -79,10 +93,41 @@ void loop() {
   }
   current_rms = sqrt(sum_rms / SAMPLES);
 
-  // Print current value
+  // Update the buffer with the latest current_rms value
+  currentBuffer[currentIndex] = current_rms;
+  currentIndex = (currentIndex + 1) % AVERAGE_SAMPLES;
+
+  // Increment the valid sample count up to the maximum buffer size
+  static int validSamples = 0;
+  if (validSamples < AVERAGE_SAMPLES) {
+    validSamples++;
+  }
+
+  // Calculate the average of the last 10 samples
+  float averageCurrent = 0;
+  for (int i = 0; i < AVERAGE_SAMPLES; i++) {
+    averageCurrent += currentBuffer[i];
+  }
+  averageCurrent /= AVERAGE_SAMPLES;
+
+  // If in 30-second mode, accumulate current data
+  if (thirtySecondMode) {
+    thirtySecondSum += current_rms;
+    thirtySecondSamples++;
+  }
+
+  // Print the current value and average
   Serial.print("\nCurrent: ");
   Serial.print(current_rms, 3); // Print with 3 decimal precision
   Serial.println(" A");
+  Serial.print("\nAverage Current:");
+  Serial.print(averageCurrent, 3);
+  Serial.println(" A");
+
+  Serial.print("\nMOTOR OFF (30 seconds elapsed)");
+  Serial.print("\nFinal Average Current: ");
+  Serial.print(finalAverageCurrent, 3);
+  Serial.println(" A\n");
   Serial.print("\nMotor time: ");
   Serial.print(motorTimer);
   delay(500); // Delay for readability
@@ -127,12 +172,25 @@ void loop() {
         updateMode(HARD);
         Serial.println("\nMode: HARD");
         break;
+      case 'T':
+        //digitalWrite(relayPin, HIGH);
+       // thirtySecondMode = true;
+        //thirtySecondSum = 0;
+        //thirtySecondSamples = 0;
+        //timerCounter = 0; // Reset timer for 30 seconds
+        Serial.println("\nMOTOR ON (30 seconds)");
+        break;
       default:
-          motorTimer = command; // Convert ASCII to integer
-          motorRunning = true;
-          Serial.print("\nMotor Timer Set to: ");
-          Serial.print(motorTimer);
-          Serial.println(" minutes");
+        motorTimer = command; // Convert ASCII to integer
+       // motorRunning = true;
+        digitalWrite(relayPin, HIGH);
+        thirtySecondMode = true;
+        thirtySecondSum = 0;
+        thirtySecondSamples = 0;
+        timerCounter = 0; // Reset timer for 30 seconds
+        Serial.print("\nMotor Timer Set to: ");
+        Serial.print(motorTimer);
+        Serial.println(" minutes");
         break;
     }
   }
@@ -143,6 +201,37 @@ ISR(TIMER1_COMPA_vect)
   static int modeTimer = 0; // Timer in tenths of seconds (100ms intervals)
   static bool motorState = true; // true for ON, false for OFF
   timerCounter++;
+  washcyclecount ++;
+  if (thirtySecondMode) {
+    if (timerCounter >= 300) { // 30 seconds elapsed
+      thirtySecondMode = false;
+      motorRunning = false;
+      digitalWrite(relayPin, LOW);
+      finalAverageCurrent = thirtySecondSum / thirtySecondSamples;
+      if(finalAverageCurrent >=1.20)
+      {
+        watercycleMode =true;
+        digitalWrite(pumpPin, HIGH);
+        washcyclecount =0;
+      }
+      
+      Serial.print("\nMOTOR OFF (30 seconds elapsed)");
+      Serial.print("\nFinal Average Current: ");
+      Serial.print(finalAverageCurrent, 3);
+      Serial.println(" A");
+    }
+    return;
+  }
+  if(watercycleMode)
+  {
+    if (washcyclecount >= 2100)
+    {
+      washcyclecount =0;
+      digitalWrite(pumpPin, LOW);
+      watercycleMode =false;
+      motorRunning = true;
+    }
+  }
 
   if (motorRunning && motorTimer) 
   {

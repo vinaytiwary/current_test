@@ -1,4 +1,19 @@
-// Define sensor and calibration parameters
+#define TRUE (1)
+#define FALSE (0)
+#define SCHEDULE_50MS_CNT  5    // 50ms / 10ms
+#define SCHEDULE_100MS_CNT 10   // 100ms / 10ms
+#define SCHEDULE_1SEC_CNT  100  // 1sec / 10ms
+typedef struct 
+{
+    unsigned char flg_10ms;
+    unsigned char flg_50ms;
+    unsigned char flg_100ms;
+    unsigned char flg_1sec;
+}schedular_flg_t;
+schedular_flg_t schedular_flg;
+void timerInit(void);
+void schedularInit(void);
+
 #define SAMPLES (100)
 #define AVERAGE_SAMPLES (10)
 const int ACS712_PIN = A0;    // Analog pin connected to ACS712
@@ -33,40 +48,6 @@ bool watercycleMode =false;
 float thirtySecondSum = 0;
 int thirtySecondSamples = 0;
 float finalAverageCurrent =0;
-void updateMode(WashMode mode) 
-{
-  currentMode = mode;
-  switch (mode) {
-    case DELICATE:
-      onTime = 2.5;
-      offTime = 2.0;
-      break;
-    case NORMAL:
-      onTime = 3.5;
-      offTime = 2.0;
-      break;
-    case STRONG:
-      onTime = 4.0;
-      offTime = 2.0;
-      break;
-    case HARD:
-      onTime = 4.5;
-      offTime = 2.0;
-      break;
-  }
-}
-
-void timer_init() {
-  cli();
-
-  TCCR1A = 0;
-  TCCR1B = 0;
-  OCR1A = 24999;
-  TCCR1B |= (1 << WGM12) | (1 << CS11) | (1 << CS10);
-  TIMSK1 |= (1 << OCIE1A);
-
-  sei();
-}
 
 void setup() {
   pinMode(relayPin, OUTPUT);
@@ -74,7 +55,8 @@ void setup() {
   digitalWrite(relayPin, LOW);
   digitalWrite(pumpPin, LOW);
   Serial.begin(9600); // Initialize UART for serial communication
-  timer_init();
+ // timerInit();
+  schedularInit();
   Serial.println("ACS712 Current Measurement Initialized");
 }
 
@@ -92,37 +74,11 @@ void loop() {
     sum_rms += (current * current);
   }
   current_rms = sqrt(sum_rms / SAMPLES);
-
-  // Update the buffer with the latest current_rms value
-  currentBuffer[currentIndex] = current_rms;
-  currentIndex = (currentIndex + 1) % AVERAGE_SAMPLES;
-
-  // Increment the valid sample count up to the maximum buffer size
-  static int validSamples = 0;
-  if (validSamples < AVERAGE_SAMPLES) {
-    validSamples++;
-  }
-
-  // Calculate the average of the last 10 samples
-  float averageCurrent = 0;
-  for (int i = 0; i < AVERAGE_SAMPLES; i++) {
-    averageCurrent += currentBuffer[i];
-  }
-  averageCurrent /= AVERAGE_SAMPLES;
-
   // If in 30-second mode, accumulate current data
   if (thirtySecondMode) {
     thirtySecondSum += current_rms;
     thirtySecondSamples++;
   }
-
-  // Print the current value and average
-  Serial.print("\nCurrent: ");
-  Serial.print(current_rms, 3); // Print with 3 decimal precision
-  Serial.println(" A");
-  Serial.print("\nAverage Current:");
-  Serial.print(averageCurrent, 3);
-  Serial.println(" A");
 
   Serial.print("\nMOTOR OFF (30 seconds elapsed)");
   Serial.print("\nFinal Average Current: ");
@@ -136,42 +92,6 @@ void loop() {
     int command = Serial.read();
 
     switch (command) {
-      case 'A':
-        digitalWrite(relayPin, HIGH);
-        motorRunning = true;
-        motorTimer = 0; // Infinite run
-        Serial.println("\nMOTOR ON (Infinite)");
-        break;
-      case 'B':
-        digitalWrite(relayPin, LOW);
-        motorRunning = false;
-        motorTimer = 0;
-        Serial.println("\nMOTOR OFF");
-        break;
-      case 'C':
-        digitalWrite(pumpPin, HIGH);
-        Serial.println("\nPUMP ON");
-        break;
-      case 'D':
-        digitalWrite(pumpPin, LOW);
-        Serial.println("\nPUMP OFF");
-        break;
-      case 'W':
-        updateMode(DELICATE);
-        Serial.println("\nMode: DELICATE");
-        break;
-      case 'X':
-        updateMode(NORMAL);
-        Serial.println("\nMode: NORMAL");
-        break;
-      case 'Y':
-        updateMode(STRONG);
-        Serial.println("\nMode: STRONG");
-        break;
-      case 'Z':
-        updateMode(HARD);
-        Serial.println("\nMode: HARD");
-        break;
       case 'T':
         //digitalWrite(relayPin, HIGH);
        // thirtySecondMode = true;
@@ -181,95 +101,63 @@ void loop() {
         Serial.println("\nMOTOR ON (30 seconds)");
         break;
       default:
-        motorTimer = command; // Convert ASCII to integer
-       // motorRunning = true;
-        digitalWrite(relayPin, HIGH);
-        thirtySecondMode = true;
-        thirtySecondSum = 0;
-        thirtySecondSamples = 0;
-        timerCounter = 0; // Reset timer for 30 seconds
-        Serial.print("\nMotor Timer Set to: ");
-        Serial.print(motorTimer);
-        Serial.println(" minutes");
+        
         break;
     }
   }
+   if(schedular_flg.flg_10ms == TRUE)
+   {
+     schedular_flg.flg_10ms = FALSE;       
+   }
+   if(schedular_flg.flg_50ms == TRUE)
+   {
+     schedular_flg.flg_50ms = FALSE;
+   }     
+   if (schedular_flg.flg_100ms == TRUE)
+   {
+    schedular_flg.flg_100ms = FALSE;
+   }
+   if (schedular_flg.flg_1sec == TRUE)
+   {
+    schedular_flg.flg_1sec = FALSE;
+   }
+   
+}
+void timerInit(void) {
+    cli(); // Disable global interrupts
+
+    TCCR1A = 0;   // Clear Timer/Counter1 Control Register A
+    TCCR1B = 0;   // Clear Timer/Counter1 Control Register B
+    OCR1A = 2499; // Set for 10ms interval
+    TCCR1B |= (1 << WGM12) | (1 << CS11) | (1 << CS10); // CTC mode, prescaler 64
+    TIMSK1 |= (1 << OCIE1A); // Enable compare match interrupt
+
+    sei(); // Enable global interrupts
+    schedularInit();
 }
 
-ISR(TIMER1_COMPA_vect) 
-{
-  static int modeTimer = 0; // Timer in tenths of seconds (100ms intervals)
-  static bool motorState = true; // true for ON, false for OFF
-  timerCounter++;
-  washcyclecount ++;
-  if (thirtySecondMode) {
-    if (timerCounter >= 300) { // 30 seconds elapsed
-      thirtySecondMode = false;
-      motorRunning = false;
-      digitalWrite(relayPin, LOW);
-      finalAverageCurrent = thirtySecondSum / thirtySecondSamples;
-      if(finalAverageCurrent >=1.20)
-      {
-        watercycleMode =true;
-        digitalWrite(pumpPin, HIGH);
-        washcyclecount =0;
-      }
-      
-      Serial.print("\nMOTOR OFF (30 seconds elapsed)");
-      Serial.print("\nFinal Average Current: ");
-      Serial.print(finalAverageCurrent, 3);
-      Serial.println(" A");
-    }
-    return;
-  }
-  if(watercycleMode)
-  {
-    if (washcyclecount >= 2100)
-    {
-      washcyclecount =0;
-      digitalWrite(pumpPin, LOW);
-      watercycleMode =false;
-      motorRunning = true;
-    }
-  }
+void schedularInit(void) {
+    schedular_flg.flg_10ms = 0;
+    schedular_flg.flg_50ms = 0;
+    schedular_flg.flg_100ms = 0;
+    schedular_flg.flg_1sec = 0;
+}
+ISR(TIMER1_COMPA_vect) {
+    static unsigned char cnt_50ms = 0;
+    static unsigned char cnt_100ms = 0;
+    static unsigned int cnt_1sec = 0;
 
-  if (motorRunning && motorTimer) 
-  {
-    modeTimer++; // Increment mode timer in 100ms intervals
-
-    if (motorState && modeTimer >= onTime * 10) 
-    {
-      motorState = false; 
-      modeTimer = 0;
-    } 
-    else if (!motorState && modeTimer >= offTime * 10) 
-    {
-      motorState = true; // Turn motor on
-      modeTimer = 0;
+    schedular_flg.flg_10ms = 1;
+    if (cnt_50ms++ >= SCHEDULE_50MS_CNT) {
+        cnt_50ms = 0;
+        schedular_flg.flg_50ms = 1;
     }
-
-    if (motorState) 
-    {
-      digitalWrite(relayPin, HIGH);
-    } 
-    else 
-    {
-      digitalWrite(relayPin, LOW);
+    if (cnt_100ms++ >= SCHEDULE_100MS_CNT) {
+        cnt_100ms = 0;
+        schedular_flg.flg_100ms = 1;
     }
-
-    if (timerCounter % 600 == 0) 
-    { 
-      motorTimer--;
-      Serial.print("\nMotor Timer Remaining: ");
-      Serial.print(motorTimer);
-      Serial.println(" minutes");
-
-      if (motorTimer == 0) {
-        motorRunning = false;
-        digitalWrite(relayPin, LOW);
-        Serial.println("\nMOTOR AUTO-OFF");
-        updateMode(currentMode); 
-      }
+    if (cnt_1sec++ >= SCHEDULE_1SEC_CNT) {
+        cnt_1sec = 0;
+        schedular_flg.flg_1sec = 1;
     }
-  }
 }

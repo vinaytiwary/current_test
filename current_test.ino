@@ -11,8 +11,9 @@ typedef struct
     unsigned char flg_1sec;
 }schedular_flg_t;
 schedular_flg_t schedular_flg;
-void timerInit(void);
+void TimerInit(void);
 void schedularInit(void);
+void togglePin(int pin);
 
 #define SAMPLES (100)
 #define AVERAGE_SAMPLES (10)
@@ -24,22 +25,8 @@ const float SENSITIVITY = 0.185; // Sensitivity for ACS712-05B (in volts per amp
 const int relayPin = 7;
 const int pumpPin = 8;
 
-volatile unsigned long timerCounter = 0;
-volatile unsigned long motorTimer = 0; // Time in seconds to auto-off motor
-bool motorRunning = false;             // Flag to check motor state
-
-volatile unsigned long washcyclecount = 0;
-
-// Mode timing parameters
 enum WashMode { DELICATE, NORMAL, STRONG, HARD };
 WashMode currentMode = DELICATE;
-
-float onTime = 2.5;
-float offTime = 2.0;
-
-// Buffer to store the last 10 samples of current_rms
-float currentBuffer[AVERAGE_SAMPLES] = {0};
-int currentIndex = 0;
 
 // Variables for 30-second operation
 bool thirtySecondMode = false;
@@ -49,29 +36,18 @@ float thirtySecondSum = 0;
 int thirtySecondSamples = 0;
 float finalAverageCurrent =0;
 
-void setup() {
-  pinMode(relayPin, OUTPUT);
-  pinMode(pumpPin, OUTPUT);
-  digitalWrite(relayPin, LOW);
-  digitalWrite(pumpPin, LOW);
-  Serial.begin(9600); // Initialize UART for serial communication
- // timerInit();
-  schedularInit();
-  Serial.println("ACS712 Current Measurement Initialized");
-}
-
-void loop() {
-  // Read analog value from ACS712
+void measureCurrent()
+{
   float sum_rms = 0;
   float current_rms = 0;
 
   for (int i = 0; i < SAMPLES; i++) {
-    int sensorValue = analogRead(ACS712_PIN);
-    // Convert analog value to voltage
-    float sensorVoltage = (sensorValue / float(ADC_RES)) * VREF;
-    // Calculate current (I = (Vout - Voffset) / Sensitivity)
-    float current = (sensorVoltage - ACS712_OFFSET) / SENSITIVITY;
-    sum_rms += (current * current);
+  int sensorValue = analogRead(ACS712_PIN);
+  // Convert analog value to voltage
+  float sensorVoltage = (sensorValue / float(ADC_RES)) * VREF;
+  // Calculate current (I = (Vout - Voffset) / Sensitivity)
+  float current = (sensorVoltage - ACS712_OFFSET) / SENSITIVITY;
+  sum_rms += (current * current);
   }
   current_rms = sqrt(sum_rms / SAMPLES);
   // If in 30-second mode, accumulate current data
@@ -79,25 +55,41 @@ void loop() {
     thirtySecondSum += current_rms;
     thirtySecondSamples++;
   }
+}
+void setup() {
+  pinMode(relayPin, OUTPUT);
+  pinMode(pumpPin, OUTPUT);
+  pinMode(2, OUTPUT);  // Set the pin as an output
+  digitalWrite(2, LOW); // Initialize the pin to LOW
+  pinMode(3, OUTPUT);  // Set the pin as an output
+  digitalWrite(3, LOW); // Initialize the pin to LOW
+  pinMode(4, OUTPUT);  // Set the pin as an output
+  digitalWrite(4, LOW); // Initialize the pin to LOWpinMode(2, OUTPUT);  // Set the pin as an output
+  pinMode(5, OUTPUT);  // Set the pin as an output
+  digitalWrite(5, LOW); // Initialize the pin to LOW
+  
+  digitalWrite(relayPin, LOW);
+  digitalWrite(pumpPin, LOW);
+  Serial.begin(9600); // Initialize UART for serial communication
+  TimerInit();
+  //schedularInit();
+  Serial.println("ACS712 Current Measurement Initialized");
+}
 
-  Serial.print("\nMOTOR OFF (30 seconds elapsed)");
-  Serial.print("\nFinal Average Current: ");
-  Serial.print(finalAverageCurrent, 3);
-  Serial.println(" A\n");
-  Serial.print("\nMotor time: ");
-  Serial.print(motorTimer);
-  delay(500); // Delay for readability
+void loop() {
+  // Read analog value from ACS712
+  
+
+//  Serial.print("\nMOTOR OFF (30 seconds elapsed)");
+//  Serial.print("\nFinal Average Current: ");
+//  Serial.print(finalAverageCurrent, 3);
+//  Serial.println(" A\n");
 
   if (Serial.available() > 0) {
     int command = Serial.read();
 
     switch (command) {
       case 'T':
-        //digitalWrite(relayPin, HIGH);
-       // thirtySecondMode = true;
-        //thirtySecondSum = 0;
-        //thirtySecondSamples = 0;
-        //timerCounter = 0; // Reset timer for 30 seconds
         Serial.println("\nMOTOR ON (30 seconds)");
         break;
       default:
@@ -107,23 +99,28 @@ void loop() {
   }
    if(schedular_flg.flg_10ms == TRUE)
    {
-     schedular_flg.flg_10ms = FALSE;       
+     schedular_flg.flg_10ms = FALSE;
+     Serial.print("\nFinal Average Current: ");
+    // togglePin(2);       
    }
    if(schedular_flg.flg_50ms == TRUE)
    {
      schedular_flg.flg_50ms = FALSE;
+     togglePin(3);
    }     
    if (schedular_flg.flg_100ms == TRUE)
    {
     schedular_flg.flg_100ms = FALSE;
+    togglePin(4);
    }
    if (schedular_flg.flg_1sec == TRUE)
    {
     schedular_flg.flg_1sec = FALSE;
+    togglePin(5);
    }
    
 }
-void timerInit(void) {
+void TimerInit(void) {
     cli(); // Disable global interrupts
 
     TCCR1A = 0;   // Clear Timer/Counter1 Control Register A
@@ -132,10 +129,13 @@ void timerInit(void) {
     TCCR1B |= (1 << WGM12) | (1 << CS11) | (1 << CS10); // CTC mode, prescaler 64
     TIMSK1 |= (1 << OCIE1A); // Enable compare match interrupt
 
+    //pinMode(LED_BUILTIN, OUTPUT); // Debug LED
     sei(); // Enable global interrupts
     schedularInit();
 }
-
+void togglePin(int pin) {
+  digitalWrite(pin, !digitalRead(pin));
+}
 void schedularInit(void) {
     schedular_flg.flg_10ms = 0;
     schedular_flg.flg_50ms = 0;
@@ -143,6 +143,10 @@ void schedularInit(void) {
     schedular_flg.flg_1sec = 0;
 }
 ISR(TIMER1_COMPA_vect) {
+    static bool toggle = false;
+    digitalWrite(2, toggle);
+    toggle = !toggle;
+
     static unsigned char cnt_50ms = 0;
     static unsigned char cnt_100ms = 0;
     static unsigned int cnt_1sec = 0;

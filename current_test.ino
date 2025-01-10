@@ -1,13 +1,20 @@
+
+//with wash timer
+const int ZCD_PIN = 2;
+volatile bool zcdTriggered = false;
 #define TRUE (1)
 #define FALSE (0)
 #define SCHEDULE_50MS_CNT  5    
 #define SCHEDULE_100MS_CNT 10   // 100ms / 10ms
 #define SCHEDULE_1SEC_CNT  100  // 1sec / 10ms
-#define relayCW (7)
-#define relayCCW (8)
+#define relayCW (2)
+#define relayCCW (3)
 #define TEST_TIMEOUT (15)
 #define CURRENT_TIMEOUT  (5)
-#define AUTOOFFTIMEOUT (15)
+#define AUTOOFFTIMEOUT (10)
+#define WASHTIMER_RELAY (4)
+#define PUMP_RELAY (5)
+#define MINIMUM_CURRENT (600)
 
 #include <Arduino.h>
 
@@ -15,7 +22,10 @@ volatile bool timeout = false;
 volatile int elapsedtime = 0;
 volatile int Curernt_count = 0;
 bool runningmode = false;
+bool sense_mode=true;
+bool testing=true;
 volatile bool testmode = false;
+volatile bool pumpmode =false;
 
 typedef struct {
     unsigned char flg_10ms;
@@ -36,8 +46,8 @@ const float SENSITIVITY = 0.185; // Sensitivity for ACS712-05B (in volts per amp
 //onst int relayPin = 7;
 //const int pumpPin = 8;
 
-enum WashMode { DELICATE, NORMAL, STRONG, HARD };
-WashMode currentMode = DELICATE;
+enum WATERCYCLE { low, medium, high };
+WATERCYCLE WATERFLOW = low;
 
 // Variables for 30-second operation
 bool thirtySecondMode = false;
@@ -55,14 +65,21 @@ void performMotorSequence();
 int getSequenceDelay(int step);
 void measureCurrent();
 void getcurrent();
+void pumphandler();
 
 void setup() {
     pinMode(relayCW, OUTPUT);
     pinMode(relayCCW, OUTPUT);
-
+    pinMode(WASHTIMER_RELAY, OUTPUT);
+    pinMode(PUMP_RELAY, OUTPUT);
+    pinMode(ZCD_PIN, INPUT);
+    
     digitalWrite(relayCW, LOW);
     digitalWrite(relayCCW, LOW);
+    digitalWrite(WASHTIMER_RELAY, LOW);
+    digitalWrite(WASHTIMER_RELAY, LOW);
     Serial.begin(9600); // Initialize UART for serial communication
+    attachInterrupt(digitalPinToInterrupt(ZCD_PIN), ZCDTrigger, RISING);
     TimerInit();
     Serial.println("ACS712 Current Measurement Initialized");
 }
@@ -103,9 +120,14 @@ void loop() {
             delay(1);
             getcurrent();
         }
+        
     }
     if (schedular_flg.flg_100ms == TRUE) {
         schedular_flg.flg_100ms = FALSE;
+        if(!testmode && testing)
+        {
+          measureCurrent();
+        }
     }
     if (schedular_flg.flg_1sec == TRUE) {
         schedular_flg.flg_1sec = FALSE;
@@ -118,12 +140,22 @@ void loop() {
                 digitalWrite(relayCCW, LOW);
                 aoutotimeout = 0;
                 finalAverageCurrent = thirtySecondSum / thirtySecondSamples;
+                if(sense_mode)
+                {
+                  pumpmode =true;
+                  sense_mode =false;
+                }
+                
             }
             
         }
+        Serial.println("\nrms current:");
+        Serial.print(current_rms, 3);
+        Serial.println(" A\n");
         Serial.println("\nfinalAverageCurrent:");
         Serial.print(finalAverageCurrent, 3);
         Serial.println(" A\n");
+       pumphandler();
     }
 }
 
@@ -184,7 +216,23 @@ void measureCurrent() {
         sum_rms += (current * current);
     }
     current_rms = sqrt(sum_rms / SAMPLES);
-    
+    if(((current_rms*1000) >=MINIMUM_CURRENT ) &&!testmode &&testing)
+    {
+       digitalWrite(WASHTIMER_RELAY, HIGH);
+       Serial.println("\nCurrent :");
+       Serial.print(current_rms, 3);
+       Serial.println(" A\n");
+       Serial.println("\nWash Timer off");
+       digitalWrite(relayCCW, LOW);
+       digitalWrite(relayCW, HIGH);
+       testmode = true;
+       testing =false;
+       elapsedtime = 0;
+       runningmode = true;
+       thirtySecondSum = 0;
+      finalAverageCurrent = 0;
+      thirtySecondSamples = 0;
+    }
 }
 
 void getcurrent() {
@@ -225,6 +273,33 @@ void performMotorSequence() {
 }
 
 int getSequenceDelay(int step) {
-    if (step == 0 || step == 2) return 2000;
+    if (step == 0 || step == 2) return 1000;
     return 1000;
+}
+
+void pumphandler()
+{
+  WATERFLOW =low;
+  static int waterfill = (WATERFLOW == low) ? 214 : 
+                    (WATERFLOW == medium) ? 374 : 
+                    (WATERFLOW == high) ? 510 : 0;
+              
+  static int pumpcnt=0;
+  
+  if(pumpmode)
+  {
+    pumpcnt++;
+    digitalWrite(PUMP_RELAY, HIGH);
+    if(pumpcnt >=waterfill)
+    {
+      digitalWrite(PUMP_RELAY, LOW);
+      pumpmode =false;
+      digitalWrite(WASHTIMER_RELAY, LOW);
+      pumpcnt=0;
+    }
+  }
+}
+
+void ZCDTrigger() {
+  zcdTriggered = true;
 }
